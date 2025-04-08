@@ -1,26 +1,136 @@
 <!DOCTYPE html>
-<html>
+<html lang="fi">
 <head>
-  <title>Karttasovellus</title>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <title>Turku Pollution Of Routes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    #map { height: 100vh; }
+    body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
+    #map { width: 100%; height: 90vh; }
+    #controls {
+      padding: 10px;
+      background: #f8f8f8;
+      border-bottom: 1px solid #ccc;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 6px 12px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    #route-info {
+      margin-left: auto;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
+
+  <div id="controls">
+    <button onclick="setMode('start')">Select startpoint</button>
+    <button onclick="setMode('end')">Select endpoint</button>
+    <button onclick="calculateRoute()">Calculate route</button>
+    <button onclick="resetRoute()">Reset</button>
+    <div id="route-info">No route to calculate</div>
+  </div>
+
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    // Luo kartta ja keskitetään Turkuun
-    const map = L.map('map').setView([60.4518, 22.2666], 13); // Turku
 
-    // Lisää OpenStreetMap-taustakartta
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors'
+  <script>
+    const map = L.map("map").setView([60.4518, 22.2666], 13);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '&copy; OpenStreetMap contributors',
     }).addTo(map);
+
+    let currentMode = null;
+    let startPoint = null;
+    let endPoint = null;
+    let startMarker = null;
+    let endMarker = null;
+    let routeLine = [];
+
+    function setMode(mode) {
+      currentMode = mode;
+    }
+
+    map.on("click", function (e) {
+      if (currentMode === 'start') {
+        if (startMarker) map.removeLayer(startMarker);
+        startPoint = e.latlng;
+        startMarker = L.marker(startPoint).addTo(map).bindPopup("Start").openPopup();
+      } else if (currentMode === 'end') {
+        if (endMarker) map.removeLayer(endMarker);
+        endPoint = e.latlng;
+        endMarker = L.marker(endPoint).addTo(map).bindPopup("Goal").openPopup();
+      }
+    });
+
+    function calculateRoute() {
+      if (!startPoint || !endPoint) {
+        alert("Please select startpoint and endpoint first");
+        return;
+      }
+
+      const url = `https://router.project-osrm.org/route/v1/driving/${startPoint.lng},${startPoint.lat};${endPoint.lng},${endPoint.lat}?overview=full&geometries=geojson`;
+
+      fetch(url)
+        .then(response => response.json())
+        .then(data => {
+            // poistetaan vanhat reitit
+            if (routeLine.length) {
+                routeLine.forEach(line => map.removeLayer(line));
+                routeLine = []; // Tyhjennetään vanhat reitit
+                }
+          routeLine = []
+
+          // nopein reitti
+          const route1 = data.routes[0];
+          const coords1 = route1.geometry.coordinates.map(c => [c[1], c[0]]);
+          const polyline1 = L.polyline(coords1, { color: "blue", weight: 4 }).addTo(map);
+          routeLine.push(polyline1)
+
+          // Toinen reitti (jos löytyy): "vihreämpi"
+          if (data.routes.length > 1) {
+            const route2 = data.routes[1];
+            const coords2 = route2.geometry.coordinates.map(c => [c[1], c[0]]);
+            const polyline2 = L.polyline(coords2, { color: "green", weight: 4, dashArray: '5, 5' }).addTo(map);
+            routeLine.push(polyline2);
+        }
+
+
+
+          map.fitBounds(routeLine[0].getBounds());
+
+          const distanceMeters = data.routes[0].distance;
+          const distanceKm = (distanceMeters / 1000).toFixed(2);
+          const emissionsKg = 0; // Tulevaisuudessa lasketaan
+
+          document.getElementById("route-info").innerText = `Route distance: ${distanceKm} km | Pollution: ${emissionsKg} `;
+        });
+    }
+
+    // nollaillaan settejä.
+    function resetRoute() {
+      if (startMarker) map.removeLayer(startMarker);
+      if (endMarker) map.removeLayer(endMarker);
+      if (routeLine.length) {
+        routeLine.forEach(line => map.removeLayer(line));
+        routeLine = [];
+        }
+      startPoint = null;
+      endPoint = null;
+      startMarker = null;
+      endMarker = null;
+      routeLine = null;
+      currentMode = null;
+      document.getElementById("route-info").innerText = "No route to calculate";
+    }
   </script>
 </body>
 </html>
