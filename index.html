@@ -23,10 +23,12 @@
       cursor: pointer;
     }
     #route-info {
-      margin-left: auto;
       font-weight: bold;
     }
   </style>
+  <script src="https://unpkg.com/georaster"></script>
+  <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
+  
 </head>
 <body>
 
@@ -35,6 +37,8 @@
     <button onclick="setMode('end')">Select endpoint</button>
     <button onclick="calculateRoute()">Calculate route</button>
     <button onclick="resetRoute()">Reset</button>
+    <button onclick="togglePoints()">School layer on/off</button>
+    <button onclick="toggleRaster()">pollution layer on/off</button>
     <div id="route-info">No route to calculate</div>
   </div>
 
@@ -44,8 +48,8 @@
 
   <script>
     const map = L.map("map").setView([60.4518, 22.2666], 13);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; OpenStreetMap contributors',
+    L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a>',
     }).addTo(map);
 
     let currentMode = null;
@@ -54,6 +58,11 @@
     let startMarker = null;
     let endMarker = null;
     let routeLine = [];
+    let geojsonFeatures = [];
+
+    let pointLayer = L.layerGroup().addTo(map); // koulut
+    let rasterLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png'); // rasteri
+
 
     function setMode(mode) {
       currentMode = mode;
@@ -77,7 +86,7 @@
         return;
       }
 
-      const url = `https://router.project-osrm.org/route/v1/driving/${startPoint.lng},${startPoint.lat};${endPoint.lng},${endPoint.lat}?overview=full&geometries=geojson`;
+      const url = `https://router.project-osrm.org/route/v1/walking/${startPoint.lng},${startPoint.lat};${endPoint.lng},${endPoint.lat}?overview=full&geometries=geojson&alternatives=true`;
 
       fetch(url)
         .then(response => response.json())
@@ -86,51 +95,120 @@
             if (routeLine.length) {
                 routeLine.forEach(line => map.removeLayer(line));
                 routeLine = []; // Tyhjennetään vanhat reitit
-                }
-          routeLine = []
+                geojsonFeatures = [];
+            }
+          
+            const infoTexts = [];
+            
 
-          // nopein reitti
-          const route1 = data.routes[0];
-          const coords1 = route1.geometry.coordinates.map(c => [c[1], c[0]]);
-          const polyline1 = L.polyline(coords1, { color: "blue", weight: 4 }).addTo(map);
-          routeLine.push(polyline1)
+            // nopein reitti
+            const route1 = data.routes[0];
+            const coords1 = route1.geometry.coordinates.map(c => [c[1], c[0]]);
+            const polyline1 = L.polyline(coords1, { color: "blue", weight: 4, dashArray: '5, 5' }).addTo(map);
+            routeLine.push(polyline1)
 
-          // Toinen reitti (jos löytyy): "vihreämpi"
-          if (data.routes.length > 1) {
-            const route2 = data.routes[1];
-            const coords2 = route2.geometry.coordinates.map(c => [c[1], c[0]]);
-            const polyline2 = L.polyline(coords2, { color: "green", weight: 4, dashArray: '5, 5' }).addTo(map);
-            routeLine.push(polyline2);
-        }
+            // Toinen reitti (jos löytyy): "vihreämpi"
+            if (data.routes.length > 1) {
+              const route2 = data.routes[1];
+              const coords2 = route2.geometry.coordinates.map(c => [c[1], c[0]]);
+              const polyline2 = L.polyline(coords2, { color: "green", weight: 4, dashArray: '5, 5' }).addTo(map);
+              routeLine.push(polyline2);
+          }
 
 
 
-          map.fitBounds(routeLine[0].getBounds());
+            map.fitBounds(routeLine[0].getBounds());
 
-          const distanceMeters = data.routes[0].distance;
-          const distanceKm = (distanceMeters / 1000).toFixed(2);
-          const emissionsKg = 0; // Tulevaisuudessa lasketaan
+            const distanceMeters = data.routes[0].distance;
+            const distanceKm = (distanceMeters / 1000).toFixed(2);
+            const emissionsKg = 0; // Tulevaisuudessa lasketaan
 
-          document.getElementById("route-info").innerText = `Route distance: ${distanceKm} km | Pollution: ${emissionsKg} `;
-        });
-    }
+            const altDistanceMeters = data.routes.length > 1 ? data.routes[1].distance : 0;
+            const altDistanceKm = (altDistanceMeters / 1000).toFixed(2);
+            const altEmissions = 0; // Alustava
+
+            document.getElementById("route-info").innerHTML = `
+              <div><strong>Normal Route (blue)</strong>: ${distanceKm} km | Pollution: ${emissionsKg}</div>
+              <div><strong>Better Choice (green)</strong>: ${altDistanceKm} km | Pollution: ${altEmissions}</div>
+            `;
+
+          });
+      }
 
     // nollaillaan settejä.
     function resetRoute() {
       if (startMarker) map.removeLayer(startMarker);
       if (endMarker) map.removeLayer(endMarker);
-      if (routeLine.length) {
-        routeLine.forEach(line => map.removeLayer(line));
-        routeLine = [];
-        }
-      startPoint = null;
-      endPoint = null;
-      startMarker = null;
-      endMarker = null;
-      routeLine = null;
-      currentMode = null;
+      startMarker = endMarker = null;
+      startPoint = endPoint = null;
+      routeLine.forEach(r => map.removeLayer(r));
+      routeLine = [];
+      geojsonFeatures = [];
       document.getElementById("route-info").innerText = "No route to calculate";
+      }
+      
+    function downloadGeoJSON() {
+      if (geojsonFeatures.length === 0) {
+        alert("Ei reittejä tallennettavaksi!");
+        return;
+      }
+      const geojson = {
+        type: "FeatureCollection",
+        features: geojsonFeatures
+      };
+
+      const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "reitit.geojson";
+      link.click();
+      URL.revokeObjectURL(url);
     }
-  </script>
+
+
+    function togglePoints() {
+      if (map.hasLayer(pointLayer)) {
+        map.removeLayer(pointLayer);
+      } else {
+        map.addLayer(pointLayer);
+      }
+    }
+
+    
+    let pollutionLayer = null;
+    let pollutionVisible = false;
+
+    function toggleRaster() {
+      if (pollutionVisible) {
+        if (pollutionLayer) map.removeLayer(pollutionLayer);
+        pollutionVisible = false;
+      } else {
+        if (pollutionLayer) {
+          map.addLayer(pollutionLayer);
+        } else {
+          // Ladataan vain kerran
+          fetch("data/PM2_5_2024_spring.tiff")
+            .then(response => response.arrayBuffer())
+            .then(arrayBuffer => {
+              parseGeoraster(arrayBuffer).then(georaster => {
+                pollutionLayer = new GeoRasterLayer({
+                  georaster: georaster,
+                  opacity: 0.6,
+                  pixelValuesToColorFn: values => {
+                    const val = values[0];
+                    if (val === 0) return null;
+                    return `rgba(0, ${Math.min(255, val * 10)}, 0, 0.6)`; // vihreä
+                  }
+                }).addTo(map);
+                map.fitBounds(pollutionLayer.getBounds());
+              });
+            });
+        }
+        pollutionVisible = true;
+      }
+    }
+
+</script>
 </body>
 </html>
