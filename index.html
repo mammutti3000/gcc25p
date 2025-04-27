@@ -25,11 +25,19 @@
     #route-info {
       font-weight: bold;
     }
+    .label-tooltip {
+      background-color: white;
+      border: 1px solid #999;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 12px;
+      color: black;
+    }
   </style>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/proj4"></script>
   <script src="https://unpkg.com/georaster"></script>
   <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
-  
 </head>
 <body>
 
@@ -39,7 +47,7 @@
     <button onclick="calculateRoute()">Calculate route</button>
     <button onclick="resetRoute()">Reset</button>
     <button onclick="togglePoints()">School layer on/off</button>
-    <button onclick="toggleRaster()">pollution layer on/off</button>
+    <button onclick="toggleRaster()">Pollution layer on/off</button>
     <div id="route-info">No route to calculate</div>
   </div>
 
@@ -59,9 +67,10 @@
     let routeLine = [];
     let geojsonFeatures = [];
 
-    let pointLayer = L.layerGroup().addTo(map); // koulut
-    let rasterLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png'); // rasteri
-
+    let pointLayer = null;
+    let pointLayerVisible = false;
+    let pollutionLayer = null;
+    let pollutionVisible = false;
 
     function setMode(mode) {
       currentMode = mode;
@@ -90,51 +99,36 @@
       fetch(url)
         .then(response => response.json())
         .then(data => {
-            // poistetaan vanhat reitit
-            if (routeLine.length) {
-                routeLine.forEach(line => map.removeLayer(line));
-                routeLine = []; // Tyhjennetään vanhat reitit
-                geojsonFeatures = [];
-            }
-          
-            const infoTexts = [];
-            
-
-            // nopein reitti
-            const route1 = data.routes[0];
-            const coords1 = route1.geometry.coordinates.map(c => [c[1], c[0]]);
-            const polyline1 = L.polyline(coords1, { color: "blue", weight: 4, dashArray: '5, 5' }).addTo(map);
-            routeLine.push(polyline1)
-
-            // Toinen reitti (jos löytyy): "vihreämpi"
-            if (data.routes.length > 1) {
-              const route2 = data.routes[1];
-              const coords2 = route2.geometry.coordinates.map(c => [c[1], c[0]]);
-              const polyline2 = L.polyline(coords2, { color: "green", weight: 4, dashArray: '5, 5' }).addTo(map);
-              routeLine.push(polyline2);
+          if (routeLine.length) {
+            routeLine.forEach(line => map.removeLayer(line));
+            routeLine = [];
+            geojsonFeatures = [];
           }
 
+          const route1 = data.routes[0];
+          const coords1 = route1.geometry.coordinates.map(c => [c[1], c[0]]);
+          const polyline1 = L.polyline(coords1, { color: "blue", weight: 4, dashArray: '5, 5' }).addTo(map);
+          routeLine.push(polyline1);
 
+          if (data.routes.length > 1) {
+            const route2 = data.routes[1];
+            const coords2 = route2.geometry.coordinates.map(c => [c[1], c[0]]);
+            const polyline2 = L.polyline(coords2, { color: "green", weight: 4, dashArray: '5, 5' }).addTo(map);
+            routeLine.push(polyline2);
+          }
 
-            map.fitBounds(routeLine[0].getBounds());
+          map.fitBounds(routeLine[0].getBounds());
 
-            const distanceMeters = data.routes[0].distance;
-            const distanceKm = (distanceMeters / 1000).toFixed(2);
-            const emissionsKg = 0; // Tulevaisuudessa lasketaan
+          const distanceKm = (data.routes[0].distance / 1000).toFixed(2);
+          const altDistanceKm = data.routes.length > 1 ? (data.routes[1].distance / 1000).toFixed(2) : 0;
 
-            const altDistanceMeters = data.routes.length > 1 ? data.routes[1].distance : 0;
-            const altDistanceKm = (altDistanceMeters / 1000).toFixed(2);
-            const altEmissions = 0; // Alustava
+          document.getElementById("route-info").innerHTML = `
+            <div><strong>Normal Route (blue)</strong>: ${distanceKm} km | Pollution: 0</div>
+            <div><strong>Better Choice (green)</strong>: ${altDistanceKm} km | Pollution: 0</div>
+          `;
+        });
+    }
 
-            document.getElementById("route-info").innerHTML = `
-              <div><strong>Normal Route (blue)</strong>: ${distanceKm} km | Pollution: ${emissionsKg}</div>
-              <div><strong>Better Choice (green)</strong>: ${altDistanceKm} km | Pollution: ${altEmissions}</div>
-            `;
-
-          });
-      }
-
-    // nollaillaan settejä.
     function resetRoute() {
       if (startMarker) map.removeLayer(startMarker);
       if (endMarker) map.removeLayer(endMarker);
@@ -144,39 +138,45 @@
       routeLine = [];
       geojsonFeatures = [];
       document.getElementById("route-info").innerText = "No route to calculate";
-      }
-      
-    function downloadGeoJSON() {
-      if (geojsonFeatures.length === 0) {
-        alert("Ei reittejä tallennettavaksi!");
-        return;
-      }
-      const geojson = {
-        type: "FeatureCollection",
-        features: geojsonFeatures
-      };
-
-      const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "reitit.geojson";
-      link.click();
-      URL.revokeObjectURL(url);
     }
-
 
     function togglePoints() {
-      if (map.hasLayer(pointLayer)) {
-        map.removeLayer(pointLayer);
+      if (pointLayerVisible) {
+        if (pointLayer) map.removeLayer(pointLayer);
+        pointLayerVisible = false;
       } else {
-        map.addLayer(pointLayer);
+        if (pointLayer) {
+          map.addLayer(pointLayer);
+        } else {
+          fetch("data/peruskoulut_turku.geojson")
+            .then(response => response.json())
+            .then(geojson => {
+              // Muutetaan koordinaatit EPSG:3067 -> EPSG:4326
+              const transform = proj4('EPSG:3067', 'EPSG:4326');
+              geojson.features.forEach(feature => {
+                if (feature.geometry.type === "Point") {
+                  const [x, y] = feature.geometry.coordinates;
+                  const [lon, lat] = transform.forward([x, y]);
+                  feature.geometry.coordinates = [lon, lat];
+                }
+              });
+
+              pointLayer = L.geoJSON(geojson, {
+                pointToLayer: function (feature, latlng) {
+                  const marker = L.marker(latlng);
+                  marker.bindTooltip(feature.properties.onimi, {
+                    permanent: true,
+                    direction: 'top',
+                    className: 'label-tooltip'
+                  });
+                  return marker;
+                }
+              }).addTo(map);
+            });
+        }
+        pointLayerVisible = true;
       }
     }
-
-    
-    let pollutionLayer = null;
-    let pollutionVisible = false;
 
     function toggleRaster() {
       if (pollutionVisible) {
@@ -186,8 +186,7 @@
         if (pollutionLayer) {
           map.addLayer(pollutionLayer);
         } else {
-          // Ladataan vain kerran
-          fetch("data/PM2_5_2024_spring_g.tif") // geotiffi
+          fetch("data/PM2_5_2024_spring_g.tif")
             .then(response => response.arrayBuffer())
             .then(arrayBuffer => {
               parseGeoraster(arrayBuffer).then(georaster => {
@@ -196,18 +195,18 @@
                   opacity: 0.6,
                   pixelValuesToColorFn: values => {
                     const val = values[0];
-                    if (val === 0) return null;
-                    return `rgba(0, ${Math.min(255, val * 10)}, 0, 0.6)`; // vihreä
+                    if (val > 6.5) {
+                      return "rgba(255, 0, 0, 0.7)"; // Punainen
+                    }
+                    return null; // Muut arvot läpinäkyviä
                   }
                 }).addTo(map);
-                map.fitBounds(pollutionLayer.getBounds());
               });
             });
         }
         pollutionVisible = true;
       }
     }
-
-</script>
+  </script>
 </body>
 </html>
