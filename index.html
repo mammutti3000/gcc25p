@@ -152,6 +152,7 @@
             .then(response => response.json())
             .then(geojson => {
               // Muutetaan koordinaatit EPSG:3067 -> EPSG:4326
+              proj4.defs("EPSG:3067", "+proj=utm +zone=35 +ellps=GRS80 +units=m +no_defs");
               const transform = proj4('EPSG:3067', 'EPSG:4326');
               geojson.features.forEach(feature => {
                 if (feature.geometry.type === "Point") {
