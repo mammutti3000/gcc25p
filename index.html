@@ -41,173 +41,229 @@
 </head>
 <body>
 
-  <div id="controls">
-    <button onclick="setMode('start')">Select startpoint</button>
-    <button onclick="setMode('end')">Select endpoint</button>
-    <button onclick="calculateRoute()">Calculate route</button>
-    <button onclick="resetRoute()">Reset</button>
-    <button onclick="togglePoints()">School layer on/off</button>
-    <button onclick="toggleRaster()">Pollution layer on/off</button>
-    <div id="route-info">No route to calculate</div>
-  </div>
+<div id="controls">
+  <button onclick="setMode('start')">Select startpoint</button>
+  <button onclick="setMode('end')">Select endpoint</button>
+  <button onclick="calculateRoute()">Calculate route</button>
+  <button onclick="resetRoute()">Reset</button>
+  <button onclick="togglePoints()">School layer on/off</button>
+  <button onclick="toggleRaster()">Pollution layer on/off</button>
+  <div id="route-info">No route to calculate</div>
+</div>
 
-  <div id="map"></div>
+<div id="map"></div>
 
-  <script>
-    const map = L.map("map").setView([60.4518, 22.2666], 13);
-    L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a>',
-    }).addTo(map);
+<script>
+const map = L.map("map").setView([60.4518, 22.2666], 13);
+L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a>',
+}).addTo(map);
 
-    let currentMode = null;
-    let startPoint = null;
-    let endPoint = null;
-    let startMarker = null;
-    let endMarker = null;
-    let routeLine = [];
-    let geojsonFeatures = [];
+let currentMode = null;
+let startPoint = null;
+let endPoint = null;
+let startMarker = null;
+let endMarker = null;
+let routeLine = [];
+let geojsonFeatures = [];
 
-    let pointLayer = null;
-    let pointLayerVisible = false;
-    let pollutionLayer = null;
-    let pollutionVisible = false;
+let pointLayer = null;
+let pointLayerVisible = false;
+let pollutionLayer = null;
+let pollutionVisible = false;
+let pollutionRaster = null; // 🔥 Rasteri tallennetaan tähän
 
-    function setMode(mode) {
-      currentMode = mode;
+function setMode(mode) {
+  currentMode = mode;
+}
+
+map.on("click", function (e) {
+  if (currentMode === 'start') {
+    if (startMarker) map.removeLayer(startMarker);
+    startPoint = e.latlng;
+    startMarker = L.marker(startPoint).addTo(map).bindPopup("Start").openPopup();
+  } else if (currentMode === 'end') {
+    if (endMarker) map.removeLayer(endMarker);
+    endPoint = e.latlng;
+    endMarker = L.marker(endPoint).addTo(map).bindPopup("Goal").openPopup();
+  }
+});
+
+async function getPollutionAlongRoute(coords) {
+  if (!pollutionRaster) {
+    console.error("Pollution raster not loaded!");
+    return 0;
+  }
+
+  let totalPollution = 0;
+  let samplePoints = [];
+
+  for (let i = 1; i < coords.length; i++) {
+    const start = coords[i - 1];
+    const end = coords[i];
+    const distance = map.distance(start, end);
+    const samples = Math.max(1, Math.round(distance / 5));
+
+    for (let j = 0; j <= samples; j++) {
+      const lat = start[0] + (end[0] - start[0]) * (j / samples);
+      const lng = start[1] + (end[1] - start[1]) * (j / samples);
+      samplePoints.push([lat, lng]);
     }
+  }
 
-    map.on("click", function (e) {
-      if (currentMode === 'start') {
-        if (startMarker) map.removeLayer(startMarker);
-        startPoint = e.latlng;
-        startMarker = L.marker(startPoint).addTo(map).bindPopup("Start").openPopup();
-      } else if (currentMode === 'end') {
-        if (endMarker) map.removeLayer(endMarker);
-        endPoint = e.latlng;
-        endMarker = L.marker(endPoint).addTo(map).bindPopup("Goal").openPopup();
+  for (const [lat, lng] of samplePoints) {
+    const col = Math.floor((lng - pollutionRaster.xmin) / pollutionRaster.pixelWidth);
+    const row = Math.floor((pollutionRaster.ymax - lat) / pollutionRaster.pixelHeight);
+
+    if (row >= 0 && row < pollutionRaster.height && col >= 0 && col < pollutionRaster.width) {
+      const value = pollutionRaster.values[0][row][col];
+      if (value !== undefined && value !== null) {
+        totalPollution += value;
       }
-    });
+    }
+  }
 
-    function calculateRoute() {
-      if (!startPoint || !endPoint) {
-        alert("Please select startpoint and endpoint first");
+  return totalPollution;
+}
+
+async function calculateRoute() {
+  if (!startPoint || !endPoint) {
+    alert("Please select startpoint and endpoint first");
+    return;
+  }
+
+  const url = `https://router.project-osrm.org/route/v1/walking/${startPoint.lng},${startPoint.lat};${endPoint.lng},${endPoint.lat}?overview=full&geometries=geojson&alternatives=true`;
+
+  fetch(url)
+    .then(response => response.json())
+    .then(async data => {
+      if (routeLine.length) {
+        routeLine.forEach(line => map.removeLayer(line));
+        routeLine = [];
+        geojsonFeatures = [];
+      }
+
+      const routes = data.routes;
+      if (!routes.length) {
+        alert("No route found");
         return;
       }
 
-      const url = `https://router.project-osrm.org/route/v1/walking/${startPoint.lng},${startPoint.lat};${endPoint.lng},${endPoint.lat}?overview=full&geometries=geojson&alternatives=true`;
+      const pollutionValues = [];
+      const polylines = [];
 
-      fetch(url)
+      for (let i = 0; i < routes.length; i++) {
+        const route = routes[i];
+        const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+        const pollution = await getPollutionAlongRoute(coords);
+        pollutionValues.push({ pollution, coords, distance: route.distance });
+
+        polylines.push(coords);
+      }
+
+      // Vertaillaan pollution-arvoja
+      let betterIndex = 0;
+      if (pollutionValues.length > 1 && pollutionValues[1].pollution < pollutionValues[0].pollution) {
+        betterIndex = 1;
+      }
+
+      // Piirretään reitit
+      for (let i = 0; i < polylines.length; i++) {
+        const color = i === betterIndex ? "green" : "blue";
+        const polyline = L.polyline(polylines[i], { color: color, weight: 4, dashArray: '5,5' }).addTo(map);
+        routeLine.push(polyline);
+      }
+
+      map.fitBounds(routeLine[0].getBounds());
+
+      const infoDiv = document.getElementById("route-info");
+      infoDiv.innerHTML = `
+        <div><strong>Normal Route (blue)</strong>: ${(pollutionValues[0].distance/1000).toFixed(2)} km | Pollution: ${pollutionValues[0].pollution.toFixed(0)}</div>
+        ${pollutionValues[1] ? `<div><strong>Better Choice (green)</strong>: ${(pollutionValues[1].distance/1000).toFixed(2)} km | Pollution: ${pollutionValues[1].pollution.toFixed(0)}</div>` : ""}
+      `;
+    });
+}
+
+function resetRoute() {
+  if (startMarker) map.removeLayer(startMarker);
+  if (endMarker) map.removeLayer(endMarker);
+  startMarker = endMarker = null;
+  startPoint = endPoint = null;
+  routeLine.forEach(r => map.removeLayer(r));
+  routeLine = [];
+  geojsonFeatures = [];
+  document.getElementById("route-info").innerText = "No route to calculate";
+}
+
+function togglePoints() {
+  if (pointLayerVisible) {
+    if (pointLayer) map.removeLayer(pointLayer);
+    pointLayerVisible = false;
+  } else {
+    if (pointLayer) {
+      map.addLayer(pointLayer);
+    } else {
+      fetch("data/peruskoulut_turku.geojson")
         .then(response => response.json())
-        .then(data => {
-          if (routeLine.length) {
-            routeLine.forEach(line => map.removeLayer(line));
-            routeLine = [];
-            geojsonFeatures = [];
-          }
+        .then(geojson => {
+          proj4.defs("EPSG:3067", "+proj=utm +zone=35 +ellps=GRS80 +units=m +no_defs");
+          const transform = proj4('EPSG:3067', 'EPSG:4326');
+          geojson.features.forEach(feature => {
+            if (feature.geometry.type === "Point") {
+              const [x, y] = feature.geometry.coordinates;
+              const [lon, lat] = transform.forward([x, y]);
+              feature.geometry.coordinates = [lon, lat];
+            }
+          });
 
-          const route1 = data.routes[0];
-          const coords1 = route1.geometry.coordinates.map(c => [c[1], c[0]]);
-          const polyline1 = L.polyline(coords1, { color: "blue", weight: 4, dashArray: '5, 5' }).addTo(map);
-          routeLine.push(polyline1);
-
-          if (data.routes.length > 1) {
-            const route2 = data.routes[1];
-            const coords2 = route2.geometry.coordinates.map(c => [c[1], c[0]]);
-            const polyline2 = L.polyline(coords2, { color: "green", weight: 4, dashArray: '5, 5' }).addTo(map);
-            routeLine.push(polyline2);
-          }
-
-          map.fitBounds(routeLine[0].getBounds());
-
-          const distanceKm = (data.routes[0].distance / 1000).toFixed(2);
-          const altDistanceKm = data.routes.length > 1 ? (data.routes[1].distance / 1000).toFixed(2) : 0;
-
-          document.getElementById("route-info").innerHTML = `
-            <div><strong>Normal Route (blue)</strong>: ${distanceKm} km | Pollution: 0</div>
-            <div><strong>Better Choice (green)</strong>: ${altDistanceKm} km | Pollution: 0</div>
-          `;
+          pointLayer = L.geoJSON(geojson, {
+            pointToLayer: function (feature, latlng) {
+              const marker = L.marker(latlng);
+              marker.bindTooltip(feature.properties.onimi, {
+                permanent: true,
+                direction: 'top',
+                className: 'label-tooltip'
+              });
+              return marker;
+            }
+          }).addTo(map);
         });
     }
+    pointLayerVisible = true;
+  }
+}
 
-    function resetRoute() {
-      if (startMarker) map.removeLayer(startMarker);
-      if (endMarker) map.removeLayer(endMarker);
-      startMarker = endMarker = null;
-      startPoint = endPoint = null;
-      routeLine.forEach(r => map.removeLayer(r));
-      routeLine = [];
-      geojsonFeatures = [];
-      document.getElementById("route-info").innerText = "No route to calculate";
-    }
-
-    function togglePoints() {
-      if (pointLayerVisible) {
-        if (pointLayer) map.removeLayer(pointLayer);
-        pointLayerVisible = false;
-      } else {
-        if (pointLayer) {
-          map.addLayer(pointLayer);
-        } else {
-          fetch("data/peruskoulut_turku.geojson")
-            .then(response => response.json())
-            .then(geojson => {
-              // Muutetaan koordinaatit EPSG:3067 -> EPSG:4326
-              proj4.defs("EPSG:3067", "+proj=utm +zone=35 +ellps=GRS80 +units=m +no_defs");
-              const transform = proj4('EPSG:3067', 'EPSG:4326');
-              geojson.features.forEach(feature => {
-                if (feature.geometry.type === "Point") {
-                  const [x, y] = feature.geometry.coordinates;
-                  const [lon, lat] = transform.forward([x, y]);
-                  feature.geometry.coordinates = [lon, lat];
+function toggleRaster() {
+  if (pollutionVisible) {
+    if (pollutionLayer) map.removeLayer(pollutionLayer);
+    pollutionVisible = false;
+  } else {
+    if (pollutionLayer) {
+      map.addLayer(pollutionLayer);
+    } else {
+      fetch("data/PM2_5_2024_spring_g.tif")
+        .then(response => response.arrayBuffer())
+        .then(arrayBuffer => {
+          parseGeoraster(arrayBuffer).then(georaster => {
+            pollutionRaster = georaster; // 🔥 Tallennetaan muistiin
+            pollutionLayer = new GeoRasterLayer({
+              georaster: georaster,
+              opacity: 0.6,
+              pixelValuesToColorFn: values => {
+                const val = values[0];
+                if (val > 6) {
+                  return "rgba(255, 0, 0, 0.7)";
                 }
-              });
-
-              pointLayer = L.geoJSON(geojson, {
-                pointToLayer: function (feature, latlng) {
-                  const marker = L.marker(latlng);
-                  marker.bindTooltip(feature.properties.onimi, {
-                    permanent: true,
-                    direction: 'top',
-                    className: 'label-tooltip'
-                  });
-                  return marker;
-                }
-              }).addTo(map);
-            });
-        }
-        pointLayerVisible = true;
-      }
+                return null;
+              }
+            }).addTo(map);
+          });
+        });
     }
+    pollutionVisible = true;
+  }
+}
+</script>
 
-    function toggleRaster() {
-      if (pollutionVisible) {
-        if (pollutionLayer) map.removeLayer(pollutionLayer);
-        pollutionVisible = false;
-      } else {
-        if (pollutionLayer) {
-          map.addLayer(pollutionLayer);
-        } else {
-          fetch("data/PM2_5_2024_spring_g.tif")
-            .then(response => response.arrayBuffer())
-            .then(arrayBuffer => {
-              parseGeoraster(arrayBuffer).then(georaster => {
-                pollutionLayer = new GeoRasterLayer({
-                  georaster: georaster,
-                  opacity: 0.6,
-                  pixelValuesToColorFn: values => {
-                    const val = values[0];
-                    if (val > 6.5) {
-                      return "rgba(255, 0, 0, 0.7)"; // Punainen
-                    }
-                    return null; // Muut arvot läpinäkyviä
-                  }
-                }).addTo(map);
-              });
-            });
-        }
-        pollutionVisible = true;
-      }
-    }
-  </script>
 </body>
 </html>
