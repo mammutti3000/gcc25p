@@ -188,7 +188,7 @@
           map.addLayer(pollutionLayer);
         } else {
           // Ladataan vain kerran
-          fetch("data/PM2_5_2024_spring.tiff")
+          fetch("data/PM2_5_2024_spring_g.tiff") // geotiffi
             .then(response => response.arrayBuffer())
             .then(arrayBuffer => {
               parseGeoraster(arrayBuffer).then(georaster => {
