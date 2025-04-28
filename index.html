@@ -47,7 +47,7 @@
   <button onclick="calculateRoute()">Calculate route</button>
   <button onclick="resetRoute()">Reset</button>
   <button onclick="togglePoints()">School layer on/off</button>
-  <button onclick="toggleRaster()">Pollution layer on/off</button>
+  <button onclick="toggleRaster()">Pollution layer on/off (over 6 ug/mm3)</button>
   <div id="route-info">No route to calculate</div>
 </div>
 
@@ -72,6 +72,15 @@ let pointLayerVisible = false;
 let pollutionLayer = null;
 let pollutionVisible = false;
 let pollutionRaster = null; 
+
+const schoolIcon = new L.Icon({
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-red.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  shadowSize: [41, 41]
+});
 
 function setMode(mode) {
   currentMode = mode;
@@ -162,30 +171,25 @@ async function calculateRoute() {
       }
 
       let betterIndex = 0;
-      let secondIndex = null;
-
-      if (pollutionValues.length > 1) {
-        betterIndex = pollutionValues[0].pollution <= pollutionValues[1].pollution ? 0 : 1;
-        secondIndex = betterIndex === 0 ? 1 : 0;
+      if (pollutionValues.length > 1 && pollutionValues[1].pollution < pollutionValues[0].pollution) {
+        betterIndex = 1;
       }
 
-      if (pollutionValues.length === 1) {
-        // yksi reitti sinisellä
-        const polyline = L.polyline(polylines[0], { color: "blue", weight: 4, dashArray: '5,5' }).addTo(map);
+      for (let i = 0; i < polylines.length; i++) {
+        let color = "blue"; 
+        if (pollutionValues.length > 1) {
+          color = (i === betterIndex) ? "green" : "blue";
+        }
+        const polyline = L.polyline(polylines[i], { color: color, weight: 4, dashArray: '5,5' }).addTo(map);
         routeLine.push(polyline);
-      } else {
-        // Kaksi reittiä, parempi vihreällä
-        const polylineBetter = L.polyline(polylines[betterIndex], { color: "green", weight: 4, dashArray: '5,5' }).addTo(map);
-        const polylineWorse = L.polyline(polylines[secondIndex], { color: "blue", weight: 4, dashArray: '5,5' }).addTo(map);
-        routeLine.push(polylineBetter, polylineWorse);
       }
 
       map.fitBounds(routeLine[0].getBounds());
 
       const infoDiv = document.getElementById("route-info");
       infoDiv.innerHTML = `
-        <div><strong>${pollutionValues.length > 1 ? "Better Choice (green)" : "Route (blue)"}</strong>: ${(pollutionValues[betterIndex].distance/1000).toFixed(2)} km | Pollution: ${pollutionValues[betterIndex].pollution.toFixed(0)}</div>
-        ${pollutionValues.length > 1 ? `<div><strong>Normal Route (blue)</strong>: ${(pollutionValues[secondIndex].distance/1000).toFixed(2)} km | Pollution: ${pollutionValues[secondIndex].pollution.toFixed(0)}</div>` : ""}
+        <div><strong>Normal Route (blue)</strong>: ${(pollutionValues[0].distance/1000).toFixed(2)} km | Pollution (Total ug/mm3): ${pollutionValues[0].pollution.toFixed(0)}</div>
+        ${pollutionValues[1] ? `<div><strong>Better Choice (green)</strong>: ${(pollutionValues[1].distance/1000).toFixed(2)} km | Pollution: ${pollutionValues[1].pollution.toFixed(0)}</div>` : ""}
       `;
     });
 }
@@ -222,18 +226,9 @@ function togglePoints() {
             }
           });
 
-          const redIcon = L.icon({
-            iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x-red.png',
-            iconSize: [25, 41],
-            iconAnchor: [12, 41],
-            popupAnchor: [1, -34],
-            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-            shadowSize: [41, 41]
-          });
-
           pointLayer = L.geoJSON(geojson, {
             pointToLayer: function (feature, latlng) {
-              const marker = L.marker(latlng, { icon: redIcon });
+              const marker = L.marker(latlng, { icon: schoolIcon });
               marker.bindTooltip(feature.properties.onimi, {
                 permanent: true,
                 direction: 'top',
