@@ -232,6 +232,7 @@ function togglePoints() {
               marker.bindTooltip(feature.properties.onimi, {
                 permanent: true,
                 direction: 'top',
+                offset: [0, -30],
                 className: 'label-tooltip'
               });
               return marker;
