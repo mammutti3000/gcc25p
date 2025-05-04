@@ -158,40 +158,42 @@ async function calculateRoute() {
         return;
       }
 
-      const pollutionValues = [];
-      const polylines = [];
+      const routeData = [];
 
       for (let i = 0; i < routes.length; i++) {
         const route = routes[i];
         const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
         const pollution = await getPollutionAlongRoute(coords);
-        pollutionValues.push({ pollution, coords, distance: route.distance, index: i });
-        polylines.push(coords);
+        routeData.push({
+          index: i,
+          coords,
+          distance: route.distance,
+          pollution
+        });
       }
 
       // Etsi lyhin reitti (sininen)
-      pollutionValues.sort((a, b) => a.distance - b.distance);
-      const shortest = pollutionValues[0];
+      routeData.sort((a, b) => a.distance - b.distance);
+      const shortest = routeData[0];
 
-      // Etsi puhtaampi mutta pidempi reitti (vihreä)
-      const pollutionThreshold = 0.95 * shortest.pollution;
-      const cleaner = pollutionValues.find(p => 
-        p.distance > shortest.distance && p.pollution < pollutionThreshold
+      // Tarkista löytyykö vihreä reitti
+      const pollutionThreshold = shortest.pollution * 0.95;
+      const cleaner = routeData.find(r =>
+        r.distance > shortest.distance && r.pollution < pollutionThreshold
       );
 
-      // Piirrä reitit väreillä
-      for (const val of pollutionValues) {
+      // Piirrä reitit
+      for (const route of routeData) {
         let color = "gray";
-        if (val.index === shortest.index) color = "blue";
-        if (cleaner && val.index === cleaner.index) color = "green";
-
-        const polyline = L.polyline(val.coords, { color, weight: 4, dashArray: '5,5' }).addTo(map);
+        if (route.index === shortest.index) color = "blue";
+        if (cleaner && route.index === cleaner.index) color = "green";
+        const polyline = L.polyline(route.coords, { color, weight: 4, dashArray: '5,5' }).addTo(map);
         routeLine.push(polyline);
       }
 
       map.fitBounds(routeLine[0].getBounds());
 
-      // Näytä infoteksti oikeassa järjestyksessä
+      // Infoteksti 
       const infoDiv = document.getElementById("route-info");
       const lines = [];
 
@@ -201,16 +203,15 @@ async function calculateRoute() {
         lines.push(`<div><strong>Cleaner Route (green)</strong>: ${(cleaner.distance/1000).toFixed(2)} km | Pollution: ${cleaner.pollution.toFixed(0)} ug/mm3</div>`);
       }
 
-      pollutionValues.forEach(val => {
-        if (val.index !== shortest.index && (!cleaner || val.index !== cleaner.index)) {
-          lines.push(`<div><strong>Alternative Route (gray)</strong>: ${(val.distance/1000).toFixed(2)} km | Pollution: ${val.pollution.toFixed(0)} ug/mm3</div>`);
+      for (const route of routeData) {
+        if (route.index !== shortest.index && (!cleaner || route.index !== cleaner.index)) {
+          lines.push(`<div><strong>Alternative Route (gray)</strong>: ${(route.distance/1000).toFixed(2)} km | Pollution: ${route.pollution.toFixed(0)} ug/mm3</div>`);
         }
-      });
+      }
 
       infoDiv.innerHTML = lines.join('');
     });
 }
-
 
 function resetRoute() {
   if (startMarker) map.removeLayer(startMarker);
