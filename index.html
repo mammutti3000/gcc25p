@@ -166,31 +166,43 @@ async function calculateRoute() {
         const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
         const pollution = await getPollutionAlongRoute(coords);
         pollutionValues.push({ pollution, coords, distance: route.distance });
-
         polylines.push(coords);
       }
 
-      let betterIndex = 0;
-      if (pollutionValues.length > 1 && pollutionValues[1].pollution < pollutionValues[0].pollution) {
-        betterIndex = 1;
+      // Etsi lyhin reitti matkan perusteella
+      let normalIndex = 0;
+      for (let i = 1; i < pollutionValues.length; i++) {
+        if (pollutionValues[i].distance < pollutionValues[normalIndex].distance) {
+          normalIndex = i;
+        }
+      }
+
+      // Etsi parempi (vihreä) reitti, jos saaste pienempi kuin lyhimmällä
+      let betterIndex = null;
+      for (let i = 0; i < pollutionValues.length; i++) {
+        if (i !== normalIndex && pollutionValues[i].pollution < pollutionValues[normalIndex].pollution) {
+          betterIndex = i;
+          break;
+        }
       }
 
       for (let i = 0; i < polylines.length; i++) {
-        let color = "blue"; 
-        if (pollutionValues.length > 1) {
-          color = (i === betterIndex) ? "green" : "blue";
-        }
-        const polyline = L.polyline(polylines[i], { color: color, weight: 4, dashArray: '5,5' }).addTo(map);
+        let color = "gray";
+        if (i === normalIndex) color = "blue";
+        if (i === betterIndex) color = "green";
+        const polyline = L.polyline(polylines[i], { color, weight: 4, dashArray: '5,5' }).addTo(map);
         routeLine.push(polyline);
       }
 
       map.fitBounds(routeLine[0].getBounds());
 
       const infoDiv = document.getElementById("route-info");
-      infoDiv.innerHTML = `
-        <div><strong>Normal Route (blue)</strong>: ${(pollutionValues[0].distance/1000).toFixed(2)} km | Pollution (Total ug/mm3): ${pollutionValues[0].pollution.toFixed(0)}</div>
-        ${pollutionValues[1] ? `<div><strong>Better Choice (green)</strong>: ${(pollutionValues[1].distance/1000).toFixed(2)} km | Pollution: ${pollutionValues[1].pollution.toFixed(0)}</div>` : ""}
-      `;
+      infoDiv.innerHTML = pollutionValues.map((val, idx) => {
+        let label = "Alternative Route (gray)";
+        if (idx === normalIndex) label = "Shortest Route (blue)";
+        if (idx === betterIndex) label = "Cleaner Route (green)";
+        return `<div><strong>${label}</strong>: ${(val.distance/1000).toFixed(2)} km | Pollution: ${val.pollution.toFixed(0)} ug/mm3</div>`;
+      }).join('');
     });
 }
 
