@@ -177,10 +177,15 @@ async function calculateRoute() {
         }
       }
 
-      // Etsi parempi (vihreä) reitti, jos saaste pienempi kuin lyhimmällä
+      // Etsi parempi (vihreä) reitti, jos saaste pienempi kuin lyhimmällä ja se on pidempi
       let betterIndex = null;
+      const pollutionThreshold = 0.95 * pollutionValues[normalIndex].pollution; // vähintään 5 % puhtaampi
       for (let i = 0; i < pollutionValues.length; i++) {
-        if (i !== normalIndex && pollutionValues[i].pollution < pollutionValues[normalIndex].pollution) {
+        if (
+          i !== normalIndex &&
+          pollutionValues[i].pollution < pollutionThreshold &&
+          pollutionValues[i].distance > pollutionValues[normalIndex].distance
+        ) {
           betterIndex = i;
           break;
         }
